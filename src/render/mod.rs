@@ -47,7 +47,8 @@ use crate::{SpriteEx, WithSprite, SPRITE_SHADER_HANDLE};
 pub struct SpriteExPipeline {
     view_layout: BindGroupLayout,
     material_layout: BindGroupLayout,
-    pub dummy_white_gpu_image: GpuImage,
+    #[allow(dead_code)]
+    dummy_white_gpu_image: GpuImage,
 }
 
 impl FromWorld for SpriteExPipeline {

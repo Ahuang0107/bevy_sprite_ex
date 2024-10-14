@@ -13,7 +13,8 @@ use bevy_render::{
 };
 use bevy_sprite::{queue_material2d_meshes, ColorMaterial, Mesh2dHandle};
 
-pub use render::*;
+pub use bundle::*;
+use render::*;
 pub use sprite::*;
 
 mod bundle;
