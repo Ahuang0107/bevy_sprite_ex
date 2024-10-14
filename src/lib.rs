@@ -73,7 +73,7 @@ impl Plugin for SpriteExPlugin {
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .init_resource::<ImageBindGroups>()
-                .init_resource::<SpecializedRenderPipelines<SpritePipeline>>()
+                .init_resource::<SpecializedRenderPipelines<SpriteExPipeline>>()
                 .init_resource::<SpriteMeta>()
                 .init_resource::<ExtractedSprites>()
                 .init_resource::<SpriteAssetEvents>()
@@ -100,7 +100,7 @@ impl Plugin for SpriteExPlugin {
 
     fn finish(&self, app: &mut App) {
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app.init_resource::<SpritePipeline>();
+            render_app.init_resource::<SpriteExPipeline>();
         }
     }
 }
@@ -117,9 +117,9 @@ pub fn calculate_bounds_2d(
     _images: Res<Assets<Image>>,
     meshes_without_aabb: Query<(Entity, &Mesh2dHandle), (Without<Aabb>, Without<NoFrustumCulling>)>,
     sprites_to_recalculate_aabb: Query<
-        (Entity, &Sprite, &Handle<Image>),
+        (Entity, &SpriteEx, &Handle<Image>),
         (
-            Or<(Without<Aabb>, Changed<Sprite>)>,
+            Or<(Without<Aabb>, Changed<SpriteEx>)>,
             Without<NoFrustumCulling>,
         ),
     >,

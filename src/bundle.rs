@@ -6,19 +6,13 @@ use bevy_render::{
 };
 use bevy_transform::components::{GlobalTransform, Transform};
 
-use crate::Sprite;
+use crate::SpriteEx;
 
 /// A [`Bundle`] of components for drawing a single sprite from an image.
-///
-/// # Extra behaviours
-///
-/// You may add one or both of the following components to enable additional behaviours:
-/// - [`ImageScaleMode`](crate::ImageScaleMode) to enable either slicing or tiling of the texture
-/// - [`TextureAtlas`] to draw a specific section of the texture
 #[derive(Bundle, Clone, Debug, Default)]
-pub struct SpriteBundle {
+pub struct SpriteExBundle {
     /// Specifies the rendering properties of the sprite, such as color tint and flip.
-    pub sprite: Sprite,
+    pub sprite: SpriteEx,
     /// The local transform of the sprite, relative to its parent.
     pub transform: Transform,
     /// The absolute transform of the sprite. This should generally not be written to directly.

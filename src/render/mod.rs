@@ -41,16 +41,16 @@ use bevy_utils::HashMap;
 use bytemuck::{Pod, Zeroable};
 use fixedbitset::FixedBitSet;
 
-use crate::{Sprite, WithSprite, SPRITE_SHADER_HANDLE};
+use crate::{SpriteEx, WithSprite, SPRITE_SHADER_HANDLE};
 
 #[derive(Resource)]
-pub struct SpritePipeline {
+pub struct SpriteExPipeline {
     view_layout: BindGroupLayout,
     material_layout: BindGroupLayout,
     pub dummy_white_gpu_image: GpuImage,
 }
 
-impl FromWorld for SpritePipeline {
+impl FromWorld for SpriteExPipeline {
     fn from_world(world: &mut World) -> Self {
         let mut system_state: SystemState<(
             Res<RenderDevice>,
@@ -120,7 +120,7 @@ impl FromWorld for SpritePipeline {
             }
         };
 
-        SpritePipeline {
+        SpriteExPipeline {
             view_layout,
             material_layout,
             dummy_white_gpu_image,
@@ -180,7 +180,7 @@ impl SpritePipelineKey {
     }
 }
 
-impl SpecializedRenderPipeline for SpritePipeline {
+impl SpecializedRenderPipeline for SpriteExPipeline {
     type Key = SpritePipelineKey;
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
@@ -350,7 +350,7 @@ pub fn extract_sprites(
         Query<(
             Entity,
             &ViewVisibility,
-            &Sprite,
+            &SpriteEx,
             &GlobalTransform,
             &Handle<Image>,
         )>,
@@ -443,8 +443,8 @@ pub struct ImageBindGroups {
 pub fn queue_sprites(
     mut view_entities: Local<FixedBitSet>,
     draw_functions: Res<DrawFunctions<Transparent2d>>,
-    sprite_pipeline: Res<SpritePipeline>,
-    mut pipelines: ResMut<SpecializedRenderPipelines<SpritePipeline>>,
+    sprite_pipeline: Res<SpriteExPipeline>,
+    mut pipelines: ResMut<SpecializedRenderPipelines<SpriteExPipeline>>,
     pipeline_cache: Res<PipelineCache>,
     msaa: Res<Msaa>,
     extracted_sprites: Res<ExtractedSprites>,
@@ -532,7 +532,7 @@ pub fn queue_sprites(
 pub fn prepare_sprite_view_bind_groups(
     mut commands: Commands,
     render_device: Res<RenderDevice>,
-    sprite_pipeline: Res<SpritePipeline>,
+    sprite_pipeline: Res<SpriteExPipeline>,
     view_uniforms: Res<ViewUniforms>,
     views: Query<(Entity, &Tonemapping), With<ExtractedView>>,
     tonemapping_luts: Res<TonemappingLuts>,
@@ -569,7 +569,7 @@ pub fn prepare_sprite_image_bind_groups(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
     mut sprite_meta: ResMut<SpriteMeta>,
-    sprite_pipeline: Res<SpritePipeline>,
+    sprite_pipeline: Res<SpriteExPipeline>,
     mut image_bind_groups: ResMut<ImageBindGroups>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     extracted_sprites: Res<ExtractedSprites>,
