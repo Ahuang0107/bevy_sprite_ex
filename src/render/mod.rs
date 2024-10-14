@@ -41,7 +41,7 @@ use bevy_utils::HashMap;
 use bytemuck::{Pod, Zeroable};
 use fixedbitset::FixedBitSet;
 
-use crate::{SpriteEx, WithSprite, SPRITE_SHADER_HANDLE};
+use crate::{BlendMode, SpriteEx, WithSprite, SPRITE_SHADER_HANDLE};
 
 #[derive(Resource)]
 pub struct SpriteExPipeline {
@@ -230,7 +230,7 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
         };
 
         let instance_rate_vertex_buffer_layout = VertexBufferLayout {
-            array_stride: 80,
+            array_stride: 96,
             step_mode: VertexStepMode::Instance,
             attributes: vec![
                 // @location(0) i_model_transpose_col0: vec4<f32>,
@@ -262,6 +262,18 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
                     format: VertexFormat::Float32x4,
                     offset: 64,
                     shader_location: 4,
+                },
+                // @location(5) blend_mode: i32,
+                VertexAttribute {
+                    format: VertexFormat::Sint32,
+                    offset: 80,
+                    shader_location: 5,
+                },
+                // @location(6) _padding: vec3<i32>,
+                VertexAttribute {
+                    format: VertexFormat::Sint32x3,
+                    offset: 84,
+                    shader_location: 6,
                 },
             ],
         };
@@ -321,6 +333,7 @@ pub struct ExtractedSprite {
     /// For cases where additional [`ExtractedSprites`] are created during extraction, this stores the
     /// entity that caused that creation for use in determining visibility.
     pub original_entity: Option<Entity>,
+    pub blend_mode: BlendMode,
 }
 
 #[derive(Resource, Default)]
@@ -379,6 +392,7 @@ pub fn extract_sprites(
                 image_handle_id: handle.id(),
                 anchor: sprite.anchor.as_vec(),
                 original_entity: None,
+                blend_mode: sprite.blend_mode,
             },
         );
     }
@@ -391,11 +405,20 @@ struct SpriteInstance {
     pub i_model_transpose: [Vec4; 3],
     pub i_color: [f32; 4],
     pub i_uv_offset_scale: [f32; 4],
+    pub blend_mode: i32,
+    // 原来的几个变量都是 4*4 字节的倍数（i_model_transpose 是 [[f32;4];3]）
+    // 所以加了 blend_mode 后还得在加一个 _padding 确保依旧是 4*4 字节的倍数
+    pub _padding: [i32; 3],
 }
 
 impl SpriteInstance {
     #[inline]
-    fn from(transform: &Affine3A, color: &LinearRgba, uv_offset_scale: &Vec4) -> Self {
+    fn from(
+        transform: &Affine3A,
+        color: &LinearRgba,
+        uv_offset_scale: &Vec4,
+        blend_mode: BlendMode,
+    ) -> Self {
         let transpose_model_3x3 = transform.matrix3.transpose();
         Self {
             i_model_transpose: [
@@ -405,6 +428,8 @@ impl SpriteInstance {
             ],
             i_color: color.to_f32_array(),
             i_uv_offset_scale: uv_offset_scale.to_array(),
+            blend_mode: blend_mode as i32,
+            _padding: [0, 0, 0],
         }
     }
 }
@@ -687,6 +712,7 @@ pub fn prepare_sprite_image_bind_groups(
                     &transform,
                     &extracted_sprite.color,
                     &uv_offset_scale,
+                    extracted_sprite.blend_mode,
                 ));
 
             if batch_image_changed {

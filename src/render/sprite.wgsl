@@ -19,12 +19,15 @@ struct VertexInput {
     @location(2) i_model_transpose_col2: vec4<f32>,
     @location(3) i_color: vec4<f32>,
     @location(4) i_uv_offset_scale: vec4<f32>,
+    @location(5) blend_mode: i32,
+    @location(6) _padding: vec3<i32>,
 }
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) blend_mode: i32,
 };
 
 @vertex
@@ -44,6 +47,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
     )) * vec4<f32>(vertex_position, 1.0);
     out.uv = vec2<f32>(vertex_position.xy) * in.i_uv_offset_scale.zw + in.i_uv_offset_scale.xy;
     out.color = in.i_color;
+    out.blend_mode = in.blend_mode;
 
     return out;
 }
@@ -54,6 +58,10 @@ fn vertex(in: VertexInput) -> VertexOutput {
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = in.color * textureSample(sprite_texture, sprite_sampler, in.uv);
+    
+    if (in.blend_mode != 0) {
+        color = vec4<f32>(0, 0, 0, 1);
+    }
 
 #ifdef TONEMAP_IN_SHADER
     color = tonemapping::tone_mapping(color, view.color_grading);

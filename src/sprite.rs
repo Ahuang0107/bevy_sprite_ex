@@ -28,4 +28,45 @@ pub struct SpriteEx {
     pub rect: Option<Rect>,
     /// [`Anchor`] point of the sprite in the world
     pub anchor: Anchor,
+    pub blend_mode: BlendMode,
+}
+
+#[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Hash, Reflect)]
+#[reflect(Default)]
+#[repr(C)]
+pub enum BlendMode {
+    #[default]
+    Normal = 0,
+    Darken = 10,
+    Multiply = 11,
+    ColorBurn = 12,
+    Lighten = 20,
+    Screen = 21,
+    ColorDodge = 22,
+    Addition = 23,
+    Overlay = 30,
+    SoftLight = 31,
+    HardLight = 32,
+    Difference = 40,
+    Exclusion = 41,
+    Subtract = 42,
+    Divide = 43,
+    Hue = 50,
+    Saturation = 51,
+    Color = 52,
+    Luminosity = 53,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::BlendMode;
+
+    #[test]
+    fn test_blend_mode_enum_int() {
+        let blend_mode: usize = BlendMode::SoftLight as usize;
+        assert_eq!(
+            31, blend_mode,
+            "Something Wrong: BlendMode::SoftLight enum int not equals to 31."
+        );
+    }
 }
