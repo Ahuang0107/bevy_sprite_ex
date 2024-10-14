@@ -11,9 +11,7 @@ use bevy_render::{
     view::{check_visibility, NoFrustumCulling, VisibilitySystems},
     ExtractSchedule, Render, RenderApp, RenderSet,
 };
-use bevy_sprite::{
-    queue_material2d_meshes, ColorMaterial, ColorMaterialPlugin, Mesh2dHandle, Mesh2dRenderPlugin,
-};
+use bevy_sprite::{queue_material2d_meshes, ColorMaterial, Mesh2dHandle};
 
 pub use render::*;
 pub use sprite::*;
@@ -43,7 +41,7 @@ pub type WithMesh2d = With<Mesh2dHandle>;
 
 /// A convenient alias for `With<Sprite>`, for use with
 /// [`bevy_render::view::VisibleEntities`].
-pub type WithSprite = With<Sprite>;
+pub type WithSprite = With<SpriteEx>;
 
 impl Plugin for SpriteExPlugin {
     fn build(&self, app: &mut App) {
@@ -60,21 +58,17 @@ impl Plugin for SpriteExPlugin {
             Shader::from_wgsl
         );
 
-        app.register_type::<Sprite>()
-            .register_type::<Anchor>()
-            .register_type::<Mesh2dHandle>()
-            .add_plugins((Mesh2dRenderPlugin, ColorMaterialPlugin))
-            .add_systems(
-                PostUpdate,
+        app.register_type::<SpriteEx>().add_systems(
+            PostUpdate,
+            (
+                calculate_bounds_2d.in_set(VisibilitySystems::CalculateBounds),
                 (
-                    calculate_bounds_2d.in_set(VisibilitySystems::CalculateBounds),
-                    (
-                        check_visibility::<WithMesh2d>,
-                        check_visibility::<WithSprite>,
-                    )
-                        .in_set(VisibilitySystems::CheckVisibility),
-                ),
-            );
+                    check_visibility::<WithMesh2d>,
+                    check_visibility::<WithSprite>,
+                )
+                    .in_set(VisibilitySystems::CheckVisibility),
+            ),
+        );
 
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
