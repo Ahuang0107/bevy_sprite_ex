@@ -4,3 +4,27 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# bevy
+bevy_app = "0.14.2"
+bevy_asset = "0.14.2"
+bevy_color = "0.14.3"
+bevy_core_pipeline = "0.14.2"
+bevy_ecs = "0.14.2"
+bevy_math = "0.14.2"
+bevy_reflect = { version = "0.14.2", features = [
+    "bevy",
+] }
+bevy_render = "0.14.2"
+bevy_transform = "0.14.2"
+bevy_utils = "0.14.2"
+bevy_derive = "0.14.2"
+bevy_sprite = "0.14.2"
+
+# other
+bytemuck = { version = "1.5", features = ["derive"] }
+fixedbitset = "0.5"
+guillotiere = "0.6.0"
+thiserror = "1.0"
+rectangle-pack = "0.4"
+bitflags = "2.3"
+radsort = "0.1"
