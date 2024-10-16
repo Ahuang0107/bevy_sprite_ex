@@ -21,6 +21,13 @@ struct VertexInput {
     @location(4) i_uv_offset_scale: vec4<f32>,
     @location(5) blend_mode: i32,
     @location(6) _padding: vec3<i32>,
+
+#ifdef MASK
+    @location(7) i_mask_model_transpose_col0: vec4<f32>,
+    @location(8) i_mask_model_transpose_col1: vec4<f32>,
+    @location(9) i_mask_model_transpose_col2: vec4<f32>,
+    @location(10) i_mask_uv_offset_scale: vec4<f32>,
+#endif
 }
 
 struct VertexOutput {
@@ -28,6 +35,10 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(2) @interpolate(flat) blend_mode: i32,
+
+#ifdef MASK
+    @location(3) mask_uv: vec2<f32>,
+#endif
 };
 
 @vertex
@@ -49,11 +60,28 @@ fn vertex(in: VertexInput) -> VertexOutput {
     out.color = in.i_color;
     out.blend_mode = in.blend_mode;
 
+#ifdef MASK
+    let mask_position =
+        affine3_to_square(mat3x4<f32>(
+            in.i_mask_model_transpose_col0,
+            in.i_mask_model_transpose_col1,
+            in.i_mask_model_transpose_col2,
+        )) * vec4<f32>(vertex_position, 1.0);
+    out.mask_uv = vec2<f32>(mask_position.xy) * in.i_mask_uv_offset_scale.zw + in.i_mask_uv_offset_scale.xy;
+#endif
+
     return out;
 }
 
 @group(1) @binding(0) var sprite_texture: texture_2d<f32>;
 @group(1) @binding(1) var sprite_sampler: sampler;
+
+#ifdef MASK
+
+@group(2) @binding(0) var mask_texture: texture_2d<f32>;
+@group(2) @binding(1) var mask_sampler: sampler;
+
+#endif
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -65,6 +93,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
 #ifdef TONEMAP_IN_SHADER
     color = tonemapping::tone_mapping(color, view.color_grading);
+#endif
+
+#ifdef MASK
+    var mask = textureSample(mask_texture, mask_sampler, in.mask_uv).x;
+    color.a *= mask;
 #endif
 
     return color;

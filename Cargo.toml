@@ -28,3 +28,9 @@ thiserror = "1.0"
 rectangle-pack = "0.4"
 bitflags = "2.3"
 radsort = "0.1"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[dev-dependencies.bevy]
+version = "0.14.2"
+default-features = false
+features = ["bevy_color", "bevy_core_pipeline", "bevy_render", "bevy_winit", "bevy_asset", "png"]

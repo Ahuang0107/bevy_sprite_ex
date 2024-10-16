@@ -16,10 +16,12 @@ use bevy_sprite::{queue_material2d_meshes, ColorMaterial, Mesh2dHandle};
 pub use bundle::*;
 use render::*;
 pub use sprite::*;
+pub use sprite_mask::*;
 
 mod bundle;
 mod render;
 mod sprite;
+mod sprite_mask;
 
 /// Adds support for 2D sprite rendering.
 #[derive(Default)]
@@ -44,6 +46,10 @@ pub type WithMesh2d = With<Mesh2dHandle>;
 /// [`bevy_render::view::VisibleEntities`].
 pub type WithSprite = With<SpriteEx>;
 
+/// A convenient alias for `With<SpriteMask>`, for use with
+/// [`bevy_render::view::VisibleEntities`].
+pub type WithSpriteMask = With<SpriteMask>;
+
 impl Plugin for SpriteExPlugin {
     fn build(&self, app: &mut App) {
         load_internal_asset!(
@@ -59,17 +65,20 @@ impl Plugin for SpriteExPlugin {
             Shader::from_wgsl
         );
 
-        app.register_type::<SpriteEx>().add_systems(
-            PostUpdate,
-            (
-                calculate_bounds_2d.in_set(VisibilitySystems::CalculateBounds),
+        app.register_type::<SpriteEx>()
+            .register_type::<SpriteMask>()
+            .add_systems(
+                PostUpdate,
                 (
-                    check_visibility::<WithMesh2d>,
-                    check_visibility::<WithSprite>,
-                )
-                    .in_set(VisibilitySystems::CheckVisibility),
-            ),
-        );
+                    calculate_bounds_2d.in_set(VisibilitySystems::CalculateBounds),
+                    (
+                        check_visibility::<WithMesh2d>,
+                        check_visibility::<WithSprite>,
+                        check_visibility::<WithSpriteMask>,
+                    )
+                        .in_set(VisibilitySystems::CheckVisibility),
+                ),
+            );
 
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app

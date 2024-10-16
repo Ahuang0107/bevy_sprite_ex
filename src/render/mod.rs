@@ -41,12 +41,13 @@ use bevy_utils::HashMap;
 use bytemuck::{Pod, Zeroable};
 use fixedbitset::FixedBitSet;
 
-use crate::{BlendMode, SpriteEx, WithSprite, SPRITE_SHADER_HANDLE};
+use crate::{BlendMode, SpriteEx, SpriteMask, WithSprite, SPRITE_SHADER_HANDLE};
 
 #[derive(Resource)]
 pub struct SpriteExPipeline {
     view_layout: BindGroupLayout,
     material_layout: BindGroupLayout,
+    mask_material_layout: BindGroupLayout,
     #[allow(dead_code)]
     dummy_white_gpu_image: GpuImage,
 }
@@ -89,6 +90,18 @@ impl FromWorld for SpriteExPipeline {
                 ),
             ),
         );
+
+        let mask_material_layout = render_device.create_bind_group_layout(
+            "sprite_mask_material_layout",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::FRAGMENT,
+                (
+                    texture_2d(TextureSampleType::Float { filterable: true }),
+                    sampler(SamplerBindingType::Filtering),
+                ),
+            ),
+        );
+
         let dummy_white_gpu_image = {
             let image = Image::default();
             let texture = render_device.create_texture(&image.texture_descriptor);
@@ -124,6 +137,7 @@ impl FromWorld for SpriteExPipeline {
         SpriteExPipeline {
             view_layout,
             material_layout,
+            mask_material_layout,
             dummy_white_gpu_image,
         }
     }
@@ -149,6 +163,8 @@ bitflags::bitflags! {
         const TONEMAP_METHOD_SOMEWHAT_BORING_DISPLAY_TRANSFORM = 5 << Self::TONEMAP_METHOD_SHIFT_BITS;
         const TONEMAP_METHOD_TONY_MC_MAPFACE    = 6 << Self::TONEMAP_METHOD_SHIFT_BITS;
         const TONEMAP_METHOD_BLENDER_FILMIC     = 7 << Self::TONEMAP_METHOD_SHIFT_BITS;
+        const MASK_RESERVED_BITS                = Self::MASK_MASK_BITS << Self::MASK_SHIFT_BITS;
+        const MASK_ENABLED                      = 1 << Self::MASK_SHIFT_BITS;
     }
 }
 
@@ -158,6 +174,9 @@ impl SpritePipelineKey {
     const TONEMAP_METHOD_MASK_BITS: u32 = 0b111;
     const TONEMAP_METHOD_SHIFT_BITS: u32 =
         Self::MSAA_SHIFT_BITS - Self::TONEMAP_METHOD_MASK_BITS.count_ones();
+    const MASK_MASK_BITS: u32 = 0b11;
+    const MASK_SHIFT_BITS: u32 =
+        Self::TONEMAP_METHOD_SHIFT_BITS - Self::MASK_MASK_BITS.count_ones();
 
     #[inline]
     pub const fn from_msaa_samples(msaa_samples: u32) -> Self {
@@ -224,15 +243,20 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
             }
         }
 
+        let mask_enable = key.contains(SpritePipelineKey::MASK_ENABLED);
+
+        if mask_enable {
+            shader_defs.push("MASK".into());
+        }
+
         let format = match key.contains(SpritePipelineKey::HDR) {
             true => ViewTarget::TEXTURE_FORMAT_HDR,
             false => TextureFormat::bevy_default(),
         };
 
-        let instance_rate_vertex_buffer_layout = VertexBufferLayout {
-            array_stride: 96,
-            step_mode: VertexStepMode::Instance,
-            attributes: vec![
+        let instance_rate_vertex_buffer_layout = {
+            let mut array_stride = 96;
+            let mut attributes = vec![
                 // @location(0) i_model_transpose_col0: vec4<f32>,
                 VertexAttribute {
                     format: VertexFormat::Float32x4,
@@ -275,8 +299,50 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
                     offset: 84,
                     shader_location: 6,
                 },
-            ],
+            ];
+
+            if mask_enable {
+                array_stride += 64;
+                attributes.append(&mut vec![
+                    // @location(7) i_mask_model_transpose_col0: vec4<f32>,
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 96,
+                        shader_location: 7,
+                    },
+                    // @location(8) i_mask_model_transpose_col1: vec4<f32>,
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 112,
+                        shader_location: 8,
+                    },
+                    // @location(9) i_mask_model_transpose_col2: vec4<f32>,
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 128,
+                        shader_location: 9,
+                    },
+                    // @location(10) i_mask_uv_offset_scale: vec4<f32>,
+                    VertexAttribute {
+                        format: VertexFormat::Float32x4,
+                        offset: 144,
+                        shader_location: 10,
+                    },
+                ])
+            }
+
+            VertexBufferLayout {
+                array_stride,
+                step_mode: VertexStepMode::Instance,
+                attributes,
+            }
         };
+
+        let mut pipeline_layout = vec![self.view_layout.clone(), self.material_layout.clone()];
+
+        if mask_enable {
+            pipeline_layout.push(self.mask_material_layout.clone());
+        }
 
         RenderPipelineDescriptor {
             vertex: VertexState {
@@ -295,7 +361,7 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
                     write_mask: ColorWrites::ALL,
                 })],
             }),
-            layout: vec![self.view_layout.clone(), self.material_layout.clone()],
+            layout: pipeline_layout,
             primitive: PrimitiveState {
                 front_face: FrontFace::Ccw,
                 cull_mode: None,
@@ -336,9 +402,115 @@ pub struct ExtractedSprite {
     pub blend_mode: BlendMode,
 }
 
+impl ExtractedSprite {
+    fn calculate_transform(&self, image_size: &Vec2) -> Affine3A {
+        calculate_transform(
+            image_size,
+            &self.custom_size,
+            &self.rect,
+            &self.transform,
+            &self.anchor,
+        )
+    }
+    fn calculate_uv_offset_scale(&self, image_size: &Vec2) -> Vec4 {
+        calculate_uv_offset_scale(image_size, &self.rect, self.flip_x, self.flip_y)
+    }
+}
+
+pub struct ExtractedSpriteMask {
+    pub transform: GlobalTransform,
+    /// Select an area of the texture
+    pub rect: Option<Rect>,
+    /// Change the on-screen size of the mask
+    pub custom_size: Option<Vec2>,
+    /// Asset ID of the [`Image`] of this sprite
+    /// PERF: storing an `AssetId` instead of `Handle<Image>` enables some optimizations (`ExtractedSpriteMask` becomes `Copy` and doesn't need to be dropped)
+    pub image_handle_id: AssetId<Image>,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub anchor: Vec2,
+}
+
+impl ExtractedSpriteMask {
+    fn calculate_transform(&self, image_size: &Vec2) -> Affine3A {
+        calculate_transform(
+            image_size,
+            &self.custom_size,
+            &self.rect,
+            &self.transform,
+            &self.anchor,
+        )
+    }
+    fn calculate_uv_offset_scale(&self, image_size: &Vec2) -> Vec4 {
+        calculate_uv_offset_scale(image_size, &self.rect, self.flip_x, self.flip_y)
+    }
+}
+
+fn calculate_transform(
+    image_size: &Vec2,
+    custom_size: &Option<Vec2>,
+    rect: &Option<Rect>,
+    transform: &GlobalTransform,
+    anchor: &Vec2,
+) -> Affine3A {
+    // By default, the size of the quad is the size of the texture, but `rect` or `custom_size` will overwrite
+    let quad_size = custom_size.unwrap_or_else(|| rect.map(|r| r.size()).unwrap_or(*image_size));
+
+    transform.affine()
+        * Affine3A::from_scale_rotation_translation(
+            quad_size.extend(1.0),
+            Quat::IDENTITY,
+            (quad_size * (-*anchor - Vec2::splat(0.5))).extend(0.0),
+        )
+}
+
+/// Calculate vertex data for this item
+fn calculate_uv_offset_scale(
+    image_size: &Vec2,
+    rect: &Option<Rect>,
+    flip_x: bool,
+    flip_y: bool,
+) -> Vec4 {
+    let mut uv_offset_scale: Vec4;
+
+    // If a rect is specified, adjust UVs and the size of the quad
+    if let Some(rect) = rect {
+        let rect_size = rect.size();
+        uv_offset_scale = Vec4::new(
+            rect.min.x / image_size.x,
+            rect.max.y / image_size.y,
+            rect_size.x / image_size.x,
+            -rect_size.y / image_size.y,
+        );
+    } else {
+        uv_offset_scale = Vec4::new(0.0, 1.0, 1.0, -1.0);
+    }
+
+    if flip_x {
+        uv_offset_scale.x += uv_offset_scale.z;
+        uv_offset_scale.z *= -1.0;
+    }
+    if flip_y {
+        uv_offset_scale.y += uv_offset_scale.w;
+        uv_offset_scale.w *= -1.0;
+    }
+
+    uv_offset_scale
+}
+
 #[derive(Resource, Default)]
 pub struct ExtractedSprites {
     pub sprites: EntityHashMap<ExtractedSprite>,
+    pub masks: EntityHashMap<ExtractedSpriteMask>,
+    pub mask_uniform_count: usize,
+}
+
+impl ExtractedSprites {
+    fn clear(&mut self) {
+        self.sprites.clear();
+        self.masks.clear();
+        self.mask_uniform_count = 0;
+    }
 }
 
 #[derive(Resource, Default)]
@@ -369,8 +541,18 @@ pub fn extract_sprites(
             &Handle<Image>,
         )>,
     >,
+    sprite_mask_query: Extract<
+        Query<(
+            Entity,
+            &ViewVisibility,
+            &SpriteMask,
+            &GlobalTransform,
+            &Handle<Image>,
+        )>,
+    >,
 ) {
-    extracted_sprites.sprites.clear();
+    extracted_sprites.clear();
+
     for (entity, view_visibility, sprite, transform, handle) in sprite_query.iter() {
         if !view_visibility.get() {
             continue;
@@ -393,6 +575,27 @@ pub fn extract_sprites(
                 anchor: sprite.anchor.as_vec(),
                 original_entity: None,
                 blend_mode: sprite.blend_mode,
+            },
+        );
+    }
+
+    for (entity, view_visibility, sprite_mask, transform, handle) in sprite_mask_query.iter() {
+        if !view_visibility.get() {
+            continue;
+        }
+
+        let rect = sprite_mask.rect;
+
+        extracted_sprites.masks.insert(
+            entity,
+            ExtractedSpriteMask {
+                transform: *transform,
+                rect,
+                custom_size: sprite_mask.custom_size,
+                image_handle_id: handle.id(),
+                flip_x: sprite_mask.flip_x,
+                flip_y: sprite_mask.flip_y,
+                anchor: sprite_mask.anchor.as_vec(),
             },
         );
     }
@@ -434,10 +637,46 @@ impl SpriteInstance {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct MaskedSpriteInstance {
+    pub sprite: SpriteInstance,
+    // Affine 4x3 transposed to 3x4
+    pub i_mask_model_transpose: [Vec4; 3],
+    pub i_mask_uv_offset_scale: [f32; 4],
+}
+
+impl MaskedSpriteInstance {
+    #[inline]
+    fn from(
+        sprite_instance: SpriteInstance,
+        mask_transform: &Affine3A,
+        mask_uv_offset_scale: &Vec4,
+    ) -> Self {
+        let mask_transpose_model_3x3 = mask_transform.matrix3.transpose();
+        Self {
+            sprite: sprite_instance,
+            i_mask_model_transpose: [
+                mask_transpose_model_3x3
+                    .x_axis
+                    .extend(mask_transform.translation.x),
+                mask_transpose_model_3x3
+                    .y_axis
+                    .extend(mask_transform.translation.y),
+                mask_transpose_model_3x3
+                    .z_axis
+                    .extend(mask_transform.translation.z),
+            ],
+            i_mask_uv_offset_scale: mask_uv_offset_scale.to_array(),
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct SpriteMeta {
     sprite_index_buffer: RawBufferVec<u32>,
     sprite_instance_buffer: RawBufferVec<SpriteInstance>,
+    masked_sprite_instance_buffer: RawBufferVec<MaskedSpriteInstance>,
 }
 
 impl Default for SpriteMeta {
@@ -445,7 +684,18 @@ impl Default for SpriteMeta {
         Self {
             sprite_index_buffer: RawBufferVec::<u32>::new(BufferUsages::INDEX),
             sprite_instance_buffer: RawBufferVec::<SpriteInstance>::new(BufferUsages::VERTEX),
+            masked_sprite_instance_buffer: RawBufferVec::<MaskedSpriteInstance>::new(
+                BufferUsages::VERTEX,
+            ),
         }
+    }
+}
+
+impl SpriteMeta {
+    fn clear(&mut self) {
+        self.sprite_index_buffer.clear();
+        self.sprite_instance_buffer.clear();
+        self.masked_sprite_instance_buffer.clear();
     }
 }
 
@@ -458,11 +708,13 @@ pub struct SpriteViewBindGroup {
 pub struct SpriteBatch {
     image_handle_id: AssetId<Image>,
     range: Range<u32>,
+    mask_image_handle_id: Option<AssetId<Image>>,
 }
 
 #[derive(Resource, Default)]
 pub struct ImageBindGroups {
     values: HashMap<AssetId<Image>, BindGroup>,
+    mask_values: HashMap<AssetId<Image>, BindGroup>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -517,7 +769,13 @@ pub fn queue_sprites(
             }
         }
 
-        let pipeline = pipelines.specialize(&pipeline_cache, &sprite_pipeline, view_key);
+        let unmasked_sprite_pipeline =
+            pipelines.specialize(&pipeline_cache, &sprite_pipeline, view_key);
+        let masked_sprite_pipeline = pipelines.specialize(
+            &pipeline_cache,
+            &sprite_pipeline,
+            view_key | SpritePipelineKey::MASK_ENABLED,
+        );
 
         view_entities.clear();
         view_entities.extend(
@@ -537,13 +795,17 @@ pub fn queue_sprites(
                 continue;
             }
 
+            // TODO 这里应该尝试根据 extracted_sprite.order 在 extracted_sprites.masks 中找到对应的 mask
+            //  然后应用到 extracted_sprite 身上
+            //  然后根据是否有 mask 来判断是使用 unmasked_sprite_pipeline 还是 masked_sprite_pipeline
+
             // These items will be sorted by depth with other phase items
             let sort_key = FloatOrd(extracted_sprite.transform.translation().z);
 
             // Add the item to the render phase
             transparent_phase.add(Transparent2d {
                 draw_function: draw_sprite_function,
-                pipeline,
+                pipeline: masked_sprite_pipeline,
                 entity: *entity,
                 sort_key,
                 // batch_range and dynamic_offset will be calculated in prepare_sprites
@@ -610,6 +872,7 @@ pub fn prepare_sprite_image_bind_groups(
             AssetEvent::LoadedWithDependencies { .. } => {}
             AssetEvent::Unused { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
                 image_bind_groups.values.remove(id);
+                image_bind_groups.mask_values.remove(id);
             }
         };
     }
@@ -617,10 +880,11 @@ pub fn prepare_sprite_image_bind_groups(
     let mut batches: Vec<(Entity, SpriteBatch)> = Vec::with_capacity(*previous_len);
 
     // Clear the sprite instances
-    sprite_meta.sprite_instance_buffer.clear();
+    sprite_meta.clear();
 
     // Index buffer indices
-    let mut index = 0;
+    let mut unmasked_index = 0;
+    let mut masked_index = 0;
 
     let image_bind_groups = &mut *image_bind_groups;
 
@@ -628,6 +892,9 @@ pub fn prepare_sprite_image_bind_groups(
         let mut batch_item_index = 0;
         let mut batch_image_size = Vec2::ZERO;
         let mut batch_image_handle = AssetId::invalid();
+
+        let mut batch_mask_image_size = Vec2::ZERO;
+        let mut batch_mask_handle = None;
 
         // Iterate through the phase items and detect when successive sprites that can be batched.
         // Spawn an entity with a `SpriteBatch` component for each possible batch.
@@ -665,64 +932,85 @@ pub fn prepare_sprite_image_bind_groups(
                     });
             }
 
-            // By default, the size of the quad is the size of the texture
-            let mut quad_size = batch_image_size;
+            // TODO 这里应该寻找 extracted_sprite 对应的 extracted_sprite_mask
+            //  但因为还没有配置 order 所以先随机找一个。
+            // extracted_sprites.masks.iter().map(|e|)
+            let mut extracted_mask = None;
+            for (_entity, mask) in extracted_sprites.masks.iter() {
+                extracted_mask = Some(mask);
+                break;
+            }
+            let mask_asset = extracted_mask.map(|m| m.image_handle_id);
 
-            // Calculate vertex data for this item
-            let mut uv_offset_scale: Vec4;
+            let batch_mask_changed = batch_mask_handle != mask_asset;
 
-            // If a rect is specified, adjust UVs and the size of the quad
-            if let Some(rect) = extracted_sprite.rect {
-                let rect_size = rect.size();
-                uv_offset_scale = Vec4::new(
-                    rect.min.x / batch_image_size.x,
-                    rect.max.y / batch_image_size.y,
-                    rect_size.x / batch_image_size.x,
-                    -rect_size.y / batch_image_size.y,
-                );
-                quad_size = rect_size;
-            } else {
-                uv_offset_scale = Vec4::new(0.0, 1.0, 1.0, -1.0);
+            if batch_mask_changed {
+                if let (Some(extracted_mask), Some(mask_asset)) = (extracted_mask, mask_asset) {
+                    let Some(gpu_image) = gpu_images.get(extracted_mask.image_handle_id) else {
+                        continue;
+                    };
+
+                    batch_mask_image_size =
+                        Vec2::new(gpu_image.size.x as f32, gpu_image.size.y as f32);
+
+                    image_bind_groups
+                        .mask_values
+                        .entry(mask_asset)
+                        .or_insert_with(|| {
+                            render_device.create_bind_group(
+                                "sprite_mask_material_bind_group",
+                                &sprite_pipeline.mask_material_layout,
+                                &BindGroupEntries::sequential((
+                                    &gpu_image.texture_view,
+                                    &gpu_image.sampler,
+                                )),
+                            )
+                        });
+                }
+
+                batch_mask_handle = mask_asset;
             }
 
-            if extracted_sprite.flip_x {
-                uv_offset_scale.x += uv_offset_scale.z;
-                uv_offset_scale.z *= -1.0;
-            }
-            if extracted_sprite.flip_y {
-                uv_offset_scale.y += uv_offset_scale.w;
-                uv_offset_scale.w *= -1.0;
-            }
+            let sprite_transform = extracted_sprite.calculate_transform(&batch_image_size);
 
-            // Override the size if a custom one is specified
-            if let Some(custom_size) = extracted_sprite.custom_size {
-                quad_size = custom_size;
-            }
-            let transform = extracted_sprite.transform.affine()
-                * Affine3A::from_scale_rotation_translation(
-                    quad_size.extend(1.0),
-                    Quat::IDENTITY,
-                    (quad_size * (-extracted_sprite.anchor - Vec2::splat(0.5))).extend(0.0),
-                );
+            let sprite_instance = SpriteInstance::from(
+                &sprite_transform,
+                &extracted_sprite.color,
+                &extracted_sprite.calculate_uv_offset_scale(&batch_image_size),
+                extracted_sprite.blend_mode,
+            );
 
             // Store the vertex data and add the item to the render phase
-            sprite_meta
-                .sprite_instance_buffer
-                .push(SpriteInstance::from(
-                    &transform,
-                    &extracted_sprite.color,
-                    &uv_offset_scale,
-                    extracted_sprite.blend_mode,
-                ));
+            let index = if let Some(extracted_mask) = extracted_mask {
+                let mask_transform = extracted_mask.calculate_transform(&batch_mask_image_size);
+                let masked_sprite_instance = MaskedSpriteInstance::from(
+                    sprite_instance,
+                    &mask_transform,
+                    &extracted_mask.calculate_uv_offset_scale(&batch_mask_image_size),
+                );
 
-            if batch_image_changed {
+                sprite_meta
+                    .masked_sprite_instance_buffer
+                    .push(masked_sprite_instance);
+
+                &mut masked_index
+            } else {
+                sprite_meta.sprite_instance_buffer.push(sprite_instance);
+
+                &mut unmasked_index
+            };
+
+            if batch_image_changed || batch_mask_changed {
                 batch_item_index = item_index;
+
+                let mask_image_handle_id = extracted_mask.map(|em| em.image_handle_id);
 
                 batches.push((
                     item.entity,
                     SpriteBatch {
                         image_handle_id: batch_image_handle,
-                        range: index..index,
+                        range: *index..*index,
+                        mask_image_handle_id,
                     },
                 ));
             }
@@ -731,11 +1019,15 @@ pub fn prepare_sprite_image_bind_groups(
                 .batch_range_mut()
                 .end += 1;
             batches.last_mut().unwrap().1.range.end += 1;
-            index += 1;
+            *index += 1;
         }
     }
     sprite_meta
         .sprite_instance_buffer
+        .write_buffer(&render_device, &render_queue);
+
+    sprite_meta
+        .masked_sprite_instance_buffer
         .write_buffer(&render_device, &render_queue);
 
     if sprite_meta.sprite_index_buffer.len() != 6 {
@@ -771,6 +1063,7 @@ pub type DrawSprite = (
     SetItemPipeline,
     SetSpriteViewBindGroup<0>,
     SetSpriteTextureBindGroup<1>,
+    SetSpriteMaskTextureBindGroup<2>,
     DrawSpriteBatch,
 );
 
@@ -824,6 +1117,37 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetSpriteTextureBindGrou
     }
 }
 
+pub struct SetSpriteMaskTextureBindGroup<const I: usize>;
+
+impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetSpriteMaskTextureBindGroup<I> {
+    type Param = SRes<ImageBindGroups>;
+    type ViewQuery = ();
+    type ItemQuery = Read<SpriteBatch>;
+
+    fn render<'w>(
+        _item: &P,
+        _view: (),
+        batch: Option<&'_ SpriteBatch>,
+        image_bind_groups: SystemParamItem<'w, '_, Self::Param>,
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        let image_bind_groups = image_bind_groups.into_inner();
+
+        if let Some(mask_image_handle_id) = &batch.unwrap().mask_image_handle_id {
+            pass.set_bind_group(
+                I,
+                image_bind_groups
+                    .mask_values
+                    .get(mask_image_handle_id)
+                    .unwrap(),
+                &[],
+            );
+        }
+
+        RenderCommandResult::Success
+    }
+}
+
 pub struct DrawSpriteBatch;
 
 impl<P: PhaseItem> RenderCommand<P> for DrawSpriteBatch {
@@ -848,14 +1172,13 @@ impl<P: PhaseItem> RenderCommand<P> for DrawSpriteBatch {
             0,
             IndexFormat::Uint32,
         );
-        pass.set_vertex_buffer(
-            0,
-            sprite_meta
-                .sprite_instance_buffer
-                .buffer()
-                .unwrap()
-                .slice(..),
-        );
+
+        let buffer = if batch.mask_image_handle_id.is_some() {
+            sprite_meta.masked_sprite_instance_buffer.buffer()
+        } else {
+            sprite_meta.sprite_instance_buffer.buffer()
+        };
+        pass.set_vertex_buffer(0, buffer.unwrap().slice(..));
         pass.draw_indexed(0..6, 0, batch.range.clone());
         RenderCommandResult::Success
     }
