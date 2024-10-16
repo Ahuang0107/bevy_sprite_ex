@@ -383,6 +383,7 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
     }
 }
 
+#[derive(Debug)]
 pub struct ExtractedSprite {
     pub transform: GlobalTransform,
     pub color: LinearRgba,
@@ -417,6 +418,7 @@ impl ExtractedSprite {
     }
 }
 
+#[derive(Debug)]
 pub struct ExtractedSpriteMask {
     pub transform: GlobalTransform,
     /// Select an area of the texture
@@ -602,7 +604,7 @@ pub fn extract_sprites(
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Copy, Clone, Pod, Zeroable, Debug)]
 struct SpriteInstance {
     // Affine 4x3 transposed to 3x4
     pub i_model_transpose: [Vec4; 3],
@@ -638,7 +640,7 @@ impl SpriteInstance {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Copy, Clone, Pod, Zeroable, Debug)]
 struct MaskedSpriteInstance {
     pub sprite: SpriteInstance,
     // Affine 4x3 transposed to 3x4
@@ -788,6 +790,8 @@ pub fn queue_sprites(
             .items
             .reserve(extracted_sprites.sprites.len());
 
+        let enable_mask = extracted_sprites.masks.iter().len() != 0;
+
         for (entity, extracted_sprite) in extracted_sprites.sprites.iter() {
             let index = extracted_sprite.original_entity.unwrap_or(*entity).index();
 
@@ -805,7 +809,11 @@ pub fn queue_sprites(
             // Add the item to the render phase
             transparent_phase.add(Transparent2d {
                 draw_function: draw_sprite_function,
-                pipeline: masked_sprite_pipeline,
+                pipeline: if enable_mask {
+                    masked_sprite_pipeline
+                } else {
+                    unmasked_sprite_pipeline
+                },
                 entity: *entity,
                 sort_key,
                 // batch_range and dynamic_offset will be calculated in prepare_sprites
@@ -950,8 +958,7 @@ pub fn prepare_sprite_image_bind_groups(
                         continue;
                     };
 
-                    batch_mask_image_size =
-                        Vec2::new(gpu_image.size.x as f32, gpu_image.size.y as f32);
+                    batch_mask_image_size = gpu_image.size.as_vec2();
 
                     image_bind_groups
                         .mask_values
@@ -972,21 +979,28 @@ pub fn prepare_sprite_image_bind_groups(
             }
 
             let sprite_transform = extracted_sprite.calculate_transform(&batch_image_size);
+            let sprite_uv_offset_scale =
+                extracted_sprite.calculate_uv_offset_scale(&batch_image_size);
 
             let sprite_instance = SpriteInstance::from(
                 &sprite_transform,
                 &extracted_sprite.color,
-                &extracted_sprite.calculate_uv_offset_scale(&batch_image_size),
+                &sprite_uv_offset_scale,
                 extracted_sprite.blend_mode,
             );
 
             // Store the vertex data and add the item to the render phase
             let index = if let Some(extracted_mask) = extracted_mask {
-                let mask_transform = extracted_mask.calculate_transform(&batch_mask_image_size);
+                let mask_transform = extracted_mask
+                    .calculate_transform(&batch_mask_image_size)
+                    .inverse()
+                    * sprite_transform;
+                let mask_uv_offset_scale =
+                    extracted_mask.calculate_uv_offset_scale(&batch_mask_image_size);
                 let masked_sprite_instance = MaskedSpriteInstance::from(
                     sprite_instance,
                     &mask_transform,
-                    &extracted_mask.calculate_uv_offset_scale(&batch_mask_image_size),
+                    &mask_uv_offset_scale,
                 );
 
                 sprite_meta

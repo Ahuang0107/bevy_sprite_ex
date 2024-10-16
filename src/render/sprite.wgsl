@@ -61,12 +61,11 @@ fn vertex(in: VertexInput) -> VertexOutput {
     out.blend_mode = in.blend_mode;
 
 #ifdef MASK
-    let mask_position =
-        affine3_to_square(mat3x4<f32>(
-            in.i_mask_model_transpose_col0,
-            in.i_mask_model_transpose_col1,
-            in.i_mask_model_transpose_col2,
-        )) * vec4<f32>(vertex_position, 1.0);
+    let mask_position = affine3_to_square(mat3x4<f32>(
+        in.i_mask_model_transpose_col0,
+        in.i_mask_model_transpose_col1,
+        in.i_mask_model_transpose_col2,
+    )) * vec4<f32>(vertex_position, 1.0);
     out.mask_uv = vec2<f32>(mask_position.xy) * in.i_mask_uv_offset_scale.zw + in.i_mask_uv_offset_scale.xy;
 #endif
 
@@ -86,7 +85,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = in.color * textureSample(sprite_texture, sprite_sampler, in.uv);
-    
+
     if (in.blend_mode != 0) {
         color = vec4<f32>(0, 0, 0, 1);
     }
@@ -96,8 +95,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
 
 #ifdef MASK
-    var mask = textureSample(mask_texture, mask_sampler, in.mask_uv).x;
-    color.a *= mask;
+    if in.mask_uv.x >= 0 && in.mask_uv.x <= 1 && in.mask_uv.y >= 0 && in.mask_uv.y <= 1 {
+        var mask_texture = textureSample(mask_texture, mask_sampler, in.mask_uv);
+
+        if mask_texture.x != 0.0 {
+            color.a = 0.0;
+        }
+    }
 #endif
 
     return color;
