@@ -23,16 +23,33 @@ fn setup_camera(mut commands: Commands) {
 fn setup_sprites(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(SpriteExBundle {
         texture: asset_server.load("sprite01.png"),
-        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        transform: Transform::from_xyz(-8.0, 0.0, 1.0),
         sprite: SpriteEx {
             blend_mode: BlendMode::Normal,
+            order: 1,
             ..default()
         },
         ..default()
     });
+    commands.spawn(SpriteExBundle {
+        texture: asset_server.load("sprite01.png"),
+        transform: Transform::from_xyz(8.0, 0.0, 10.0),
+        sprite: SpriteEx {
+            blend_mode: BlendMode::Normal,
+            order: 10,
+            ..default()
+        },
+        ..default()
+    });
+    // sprite mask 只会应用在第一个 sprite 上，而不会应用在第二个 sprite 上
     commands.spawn(SpriteMaskBundle {
         texture: asset_server.load("sprite02.png"),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        sprite_mask: SpriteMask {
+            range_start: 0,
+            range_end: 5,
+            ..default()
+        },
         ..default()
     });
 }

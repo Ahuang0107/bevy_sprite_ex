@@ -401,6 +401,7 @@ pub struct ExtractedSprite {
     /// entity that caused that creation for use in determining visibility.
     pub original_entity: Option<Entity>,
     pub blend_mode: BlendMode,
+    pub order: u32,
 }
 
 impl ExtractedSprite {
@@ -431,6 +432,8 @@ pub struct ExtractedSpriteMask {
     pub flip_x: bool,
     pub flip_y: bool,
     pub anchor: Vec2,
+    pub range_start: u32,
+    pub range_end: u32,
 }
 
 impl ExtractedSpriteMask {
@@ -577,6 +580,7 @@ pub fn extract_sprites(
                 anchor: sprite.anchor.as_vec(),
                 original_entity: None,
                 blend_mode: sprite.blend_mode,
+                order: sprite.order,
             },
         );
     }
@@ -598,6 +602,8 @@ pub fn extract_sprites(
                 flip_x: sprite_mask.flip_x,
                 flip_y: sprite_mask.flip_y,
                 anchor: sprite_mask.anchor.as_vec(),
+                range_start: sprite_mask.range_start,
+                range_end: sprite_mask.range_end,
             },
         );
     }
@@ -790,8 +796,6 @@ pub fn queue_sprites(
             .items
             .reserve(extracted_sprites.sprites.len());
 
-        let enable_mask = extracted_sprites.masks.iter().len() != 0;
-
         for (entity, extracted_sprite) in extracted_sprites.sprites.iter() {
             let index = extracted_sprite.original_entity.unwrap_or(*entity).index();
 
@@ -799,9 +803,16 @@ pub fn queue_sprites(
                 continue;
             }
 
-            // TODO 这里应该尝试根据 extracted_sprite.order 在 extracted_sprites.masks 中找到对应的 mask
-            //  然后应用到 extracted_sprite 身上
-            //  然后根据是否有 mask 来判断是使用 unmasked_sprite_pipeline 还是 masked_sprite_pipeline
+            // 这里只是根据 order 判断是否有 sprite mask 应用到了 extracted_sprite 身上，从而决定使用哪条管线
+            let mut enable_mask = false;
+            for (_, extracted_sprite_mask) in extracted_sprites.masks.iter() {
+                if extracted_sprite.order >= extracted_sprite_mask.range_start
+                    && extracted_sprite.order <= extracted_sprite_mask.range_end
+                {
+                    enable_mask = true;
+                    break;
+                }
+            }
 
             // These items will be sorted by depth with other phase items
             let sort_key = FloatOrd(extracted_sprite.transform.translation().z);
@@ -940,13 +951,15 @@ pub fn prepare_sprite_image_bind_groups(
                     });
             }
 
-            // TODO 这里应该寻找 extracted_sprite 对应的 extracted_sprite_mask
-            //  但因为还没有配置 order 所以先随机找一个。
-            // extracted_sprites.masks.iter().map(|e|)
+            // TODO 目前这里只支持应用一个 mask
             let mut extracted_mask = None;
-            for (_entity, mask) in extracted_sprites.masks.iter() {
-                extracted_mask = Some(mask);
-                break;
+            for (_, extracted_sprite_mask) in extracted_sprites.masks.iter() {
+                if extracted_sprite.order >= extracted_sprite_mask.range_start
+                    && extracted_sprite.order <= extracted_sprite_mask.range_end
+                {
+                    extracted_mask = Some(extracted_sprite_mask);
+                    break;
+                }
             }
             let mask_asset = extracted_mask.map(|m| m.image_handle_id);
 

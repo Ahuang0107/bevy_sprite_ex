@@ -22,4 +22,7 @@ pub struct SpriteMask {
     pub rect: Option<Rect>,
     /// [`Anchor`] point of the sprite in the world
     pub anchor: Anchor,
+    /// Order range, mask will apply into sprite which in the order range
+    pub range_start: u32,
+    pub range_end: u32,
 }
