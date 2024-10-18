@@ -507,14 +507,12 @@ fn calculate_uv_offset_scale(
 pub struct ExtractedSprites {
     pub sprites: EntityHashMap<ExtractedSprite>,
     pub masks: EntityHashMap<ExtractedSpriteMask>,
-    pub mask_uniform_count: usize,
 }
 
 impl ExtractedSprites {
     fn clear(&mut self) {
         self.sprites.clear();
         self.masks.clear();
-        self.mask_uniform_count = 0;
     }
 }
 
