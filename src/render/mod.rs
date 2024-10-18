@@ -397,6 +397,8 @@ pub struct ExtractedSprite {
     pub original_entity: Option<Entity>,
     pub blend_mode: BlendMode,
     pub order: u32,
+    /// 表示需要应用在自身上的 mask 的 entity 的 index
+    pub mask_entities: Vec<Entity>,
 }
 
 impl ExtractedSprite {
@@ -501,12 +503,21 @@ fn calculate_uv_offset_scale(
 #[derive(Resource, Default)]
 pub struct ExtractedSprites {
     pub sprites: EntityHashMap<ExtractedSprite>,
-    pub masks: EntityHashMap<ExtractedSpriteMask>,
 }
 
 impl ExtractedSprites {
     fn clear(&mut self) {
         self.sprites.clear();
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct ExtractedSpriteMasks {
+    pub masks: EntityHashMap<ExtractedSpriteMask>,
+}
+
+impl ExtractedSpriteMasks {
+    fn clear(&mut self) {
         self.masks.clear();
     }
 }
@@ -530,6 +541,7 @@ pub fn extract_sprite_events(
 
 pub fn extract_sprites(
     mut extracted_sprites: ResMut<ExtractedSprites>,
+    mut extracted_sprite_masks: ResMut<ExtractedSpriteMasks>,
     sprite_query: Extract<
         Query<(
             Entity,
@@ -550,6 +562,7 @@ pub fn extract_sprites(
     >,
 ) {
     extracted_sprites.clear();
+    extracted_sprite_masks.clear();
 
     for (entity, view_visibility, sprite, transform, handle) in sprite_query.iter() {
         if !view_visibility.get() {
@@ -574,6 +587,7 @@ pub fn extract_sprites(
                 original_entity: None,
                 blend_mode: sprite.blend_mode,
                 order: sprite.order,
+                mask_entities: Vec::new(),
             },
         );
     }
@@ -585,7 +599,7 @@ pub fn extract_sprites(
 
         let rect = sprite_mask.rect;
 
-        extracted_sprites.masks.insert(
+        extracted_sprite_masks.masks.insert(
             entity,
             ExtractedSpriteMask {
                 transform: *transform,
@@ -743,7 +757,8 @@ pub fn queue_sprites(
     mut pipelines: ResMut<SpecializedRenderPipelines<SpriteExPipeline>>,
     pipeline_cache: Res<PipelineCache>,
     msaa: Res<Msaa>,
-    extracted_sprites: Res<ExtractedSprites>,
+    mut extracted_sprites: ResMut<ExtractedSprites>,
+    extracted_sprite_masks: Res<ExtractedSpriteMasks>,
     mut transparent_render_phases: ResMut<ViewSortedRenderPhases<Transparent2d>>,
     mut views: Query<(
         Entity,
@@ -806,21 +821,18 @@ pub fn queue_sprites(
             .items
             .reserve(extracted_sprites.sprites.len());
 
-        for (entity, extracted_sprite) in extracted_sprites.sprites.iter() {
+        for (entity, extracted_sprite) in extracted_sprites.sprites.iter_mut() {
             let index = extracted_sprite.original_entity.unwrap_or(*entity).index();
 
             if !view_entities.contains(index as usize) {
                 continue;
             }
 
-            // 这里只是根据 order 判断是否有 sprite mask 应用到了 extracted_sprite 身上，从而决定使用哪条管线
-            let mut enable_mask = false;
-            for (_, extracted_sprite_mask) in extracted_sprites.masks.iter() {
+            for (mask_entity, extracted_sprite_mask) in extracted_sprite_masks.masks.iter() {
                 if extracted_sprite.order >= extracted_sprite_mask.range_start
                     && extracted_sprite.order <= extracted_sprite_mask.range_end
                 {
-                    enable_mask = true;
-                    break;
+                    extracted_sprite.mask_entities.push(*mask_entity);
                 }
             }
 
@@ -830,10 +842,10 @@ pub fn queue_sprites(
             // Add the item to the render phase
             transparent_phase.add(Transparent2d {
                 draw_function: draw_sprite_function,
-                pipeline: if enable_mask {
-                    masked_sprite_pipeline
-                } else {
+                pipeline: if extracted_sprite.mask_entities.is_empty() {
                     unmasked_sprite_pipeline
+                } else {
+                    masked_sprite_pipeline
                 },
                 entity: *entity,
                 sort_key,
@@ -890,6 +902,7 @@ pub fn prepare_sprite_image_bind_groups(
     mut image_bind_groups: ResMut<ImageBindGroups>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     extracted_sprites: Res<ExtractedSprites>,
+    extracted_sprite_masks: Res<ExtractedSpriteMasks>,
     mut phases: ResMut<ViewSortedRenderPhases<Transparent2d>>,
     events: Res<SpriteAssetEvents>,
 ) {
@@ -965,12 +978,9 @@ pub fn prepare_sprite_image_bind_groups(
 
             // TODO 目前这里只支持应用一个 mask
             let mut extracted_mask = None;
-            for (_, extracted_sprite_mask) in extracted_sprites.masks.iter() {
-                if extracted_sprite.order >= extracted_sprite_mask.range_start
-                    && extracted_sprite.order <= extracted_sprite_mask.range_end
-                {
+            if let Some(entity) = extracted_sprite.mask_entities.first() {
+                if let Some(extracted_sprite_mask) = extracted_sprite_masks.masks.get(entity) {
                     extracted_mask = Some(extracted_sprite_mask);
-                    break;
                 }
             }
             let mask_asset = extracted_mask.map(|m| m.image_handle_id);

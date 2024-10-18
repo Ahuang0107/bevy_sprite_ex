@@ -86,6 +86,7 @@ impl Plugin for SpriteExPlugin {
                 .init_resource::<SpecializedRenderPipelines<SpriteExPipeline>>()
                 .init_resource::<SpriteMeta>()
                 .init_resource::<ExtractedSprites>()
+                .init_resource::<ExtractedSpriteMasks>()
                 .init_resource::<SpriteAssetEvents>()
                 .add_render_command::<Transparent2d, DrawSprite>()
                 .add_systems(
