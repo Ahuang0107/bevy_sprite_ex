@@ -82,7 +82,7 @@ impl Plugin for SpriteExPlugin {
 
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
-                .init_resource::<ImageBindGroups>()
+                .init_resource::<SpriteRenderResource>()
                 .init_resource::<SpecializedRenderPipelines<SpriteExPipeline>>()
                 .init_resource::<SpriteMeta>()
                 .init_resource::<ExtractedSprites>()

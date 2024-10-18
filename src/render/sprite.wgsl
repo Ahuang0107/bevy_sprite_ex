@@ -76,7 +76,7 @@ fn vertex(in: VertexInput) -> VertexOutput {
         in.i_mask_0_model_transpose_col2,
     )) * vec4<f32>(vertex_position, 1.0);
     out.mask_0_uv = vec2<f32>(mask_0_position.xy) * in.i_mask_0_uv_offset_scale.zw + in.i_mask_0_uv_offset_scale.xy;
-    
+
     let mask_1_position = affine3_to_square(mat3x4<f32>(
         in.i_mask_1_model_transpose_col0,
         in.i_mask_1_model_transpose_col1,
@@ -94,8 +94,10 @@ fn vertex(in: VertexInput) -> VertexOutput {
 #ifdef MASK
 
 @group(2) @binding(0) var mask_0_texture: texture_2d<f32>;
-@group(2) @binding(1) var mask_1_texture: texture_2d<f32>;
-@group(2) @binding(2) var mask_sampler: sampler;
+@group(2) @binding(1) var mask_0_sampler: sampler;
+
+@group(3) @binding(0) var mask_1_texture: texture_2d<f32>;
+@group(3) @binding(1) var mask_1_sampler: sampler;
 
 #endif
 
@@ -113,7 +115,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
 #ifdef MASK
     if in.mask_0_uv.x >= 0 && in.mask_0_uv.x <= 1 && in.mask_0_uv.y >= 0 && in.mask_0_uv.y <= 1 {
-        var mask_texture = textureSample(mask_0_texture, mask_sampler, in.mask_0_uv);
+        var mask_texture = textureSample(mask_0_texture, mask_0_sampler, in.mask_0_uv);
 
         if mask_texture.x != 0.0 {
             color.a = 0.0;
@@ -121,8 +123,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if in.mask_count > 1 {
         if in.mask_1_uv.x >= 0 && in.mask_1_uv.x <= 1 && in.mask_1_uv.y >= 0 && in.mask_1_uv.y <= 1 {
-            var mask_texture = textureSample(mask_1_texture, mask_sampler, in.mask_1_uv);
-    
+            var mask_texture = textureSample(mask_1_texture, mask_1_sampler, in.mask_1_uv);
+
             if mask_texture.x != 0.0 {
                 color.a = 0.0;
             }

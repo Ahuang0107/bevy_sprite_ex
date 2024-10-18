@@ -15,6 +15,7 @@ use bevy_ecs::{
     system::{lifetimeless::*, SystemParamItem, SystemState},
 };
 use bevy_math::{Affine3A, FloatOrd, Quat, Rect, Vec2, Vec4};
+use bevy_reflect::List;
 use bevy_render::{
     render_asset::RenderAssets,
     render_phase::{
@@ -40,8 +41,11 @@ use bevy_transform::components::GlobalTransform;
 use bevy_utils::HashMap;
 use bytemuck::{Pod, Zeroable};
 use fixedbitset::FixedBitSet;
+use tracing::info;
 
 use crate::{BlendMode, SpriteEx, SpriteMask, WithSprite, SPRITE_SHADER_HANDLE};
+
+const MAX_MASK_COUNT: usize = 2;
 
 #[derive(Resource)]
 pub struct SpriteExPipeline {
@@ -96,7 +100,6 @@ impl FromWorld for SpriteExPipeline {
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::FRAGMENT,
                 (
-                    texture_2d(TextureSampleType::Float { filterable: true }),
                     texture_2d(TextureSampleType::Float { filterable: true }),
                     sampler(SamplerBindingType::Filtering),
                 ),
@@ -336,6 +339,7 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
         let mut pipeline_layout = vec![self.view_layout.clone(), self.material_layout.clone()];
 
         if mask_enable {
+            pipeline_layout.push(self.mask_material_layout.clone());
             pipeline_layout.push(self.mask_material_layout.clone());
         }
 
@@ -668,7 +672,10 @@ struct MaskedSpriteInstance {
 
 impl MaskedSpriteInstance {
     #[inline]
-    fn from(sprite_instance: SpriteInstance, masks: [Option<(&Affine3A, &Vec4)>; 2]) -> Self {
+    fn from(
+        sprite_instance: SpriteInstance,
+        masks: [Option<(Affine3A, Vec4)>; MAX_MASK_COUNT],
+    ) -> Self {
         let (i_mask_0_model_transpose, i_mask_0_uv_offset_scale) = Self::from_mask(masks[0]);
         let (i_mask_1_model_transpose, i_mask_1_uv_offset_scale) = Self::from_mask(masks[1]);
         Self {
@@ -680,7 +687,7 @@ impl MaskedSpriteInstance {
         }
     }
     #[inline]
-    fn from_mask(mask: Option<(&Affine3A, &Vec4)>) -> ([Vec4; 3], [f32; 4]) {
+    fn from_mask(mask: Option<(Affine3A, Vec4)>) -> ([Vec4; 3], [f32; 4]) {
         if let Some((mask_transform, mask_uv_offset_scale)) = mask {
             let mask_transpose_model_3x3 = mask_transform.matrix3.transpose();
             (
@@ -739,14 +746,14 @@ pub struct SpriteViewBindGroup {
 pub struct SpriteBatch {
     image_handle_id: AssetId<Image>,
     range: Range<u32>,
-    mask_image_handle_id: Option<AssetId<Image>>,
+    mask_image_handle_ids: Vec<AssetId<Image>>,
 }
 
 #[derive(Resource, Default)]
-pub struct ImageBindGroups {
+pub struct SpriteRenderResource {
+    dummy: Option<BindGroup>,
     values: HashMap<AssetId<Image>, BindGroup>,
     mask_values: HashMap<AssetId<Image>, BindGroup>,
-    dummy_white_gpu_image: Option<GpuImage>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -899,7 +906,7 @@ pub fn prepare_sprite_image_bind_groups(
     render_queue: Res<RenderQueue>,
     mut sprite_meta: ResMut<SpriteMeta>,
     sprite_pipeline: Res<SpriteExPipeline>,
-    mut image_bind_groups: ResMut<ImageBindGroups>,
+    mut image_bind_groups: ResMut<SpriteRenderResource>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     extracted_sprites: Res<ExtractedSprites>,
     extracted_sprite_masks: Res<ExtractedSpriteMasks>,
@@ -918,8 +925,14 @@ pub fn prepare_sprite_image_bind_groups(
             }
         };
     }
-
-    image_bind_groups.dummy_white_gpu_image = Some(sprite_pipeline.dummy_white_gpu_image.clone());
+    if image_bind_groups.dummy.is_none() {
+        let gpu_image = &sprite_pipeline.dummy_white_gpu_image;
+        image_bind_groups.dummy = Some(render_device.create_bind_group(
+            "sprite_mask_material_bind_group",
+            &sprite_pipeline.mask_material_layout,
+            &BindGroupEntries::sequential((&gpu_image.texture_view, &gpu_image.sampler)),
+        ));
+    }
 
     let mut batches: Vec<(Entity, SpriteBatch)> = Vec::with_capacity(*previous_len);
 
@@ -937,8 +950,7 @@ pub fn prepare_sprite_image_bind_groups(
         let mut batch_image_size = Vec2::ZERO;
         let mut batch_image_handle = AssetId::invalid();
 
-        let mut batch_mask_image_size = Vec2::ZERO;
-        let mut batch_mask_handle = None;
+        let mut batch_mask_image_handles = Vec::new();
 
         // Iterate through the phase items and detect when successive sprites that can be batched.
         // Spawn an entity with a `SpriteBatch` component for each possible batch.
@@ -976,90 +988,94 @@ pub fn prepare_sprite_image_bind_groups(
                     });
             }
 
-            // TODO 目前这里只支持应用一个 mask
-            let mut extracted_mask = None;
-            if let Some(entity) = extracted_sprite.mask_entities.first() {
-                if let Some(extracted_sprite_mask) = extracted_sprite_masks.masks.get(entity) {
-                    extracted_mask = Some(extracted_sprite_mask);
-                }
-            }
-            let mask_asset = extracted_mask.map(|m| m.image_handle_id);
-
-            let batch_mask_changed = batch_mask_handle != mask_asset;
-
-            if batch_mask_changed {
-                if let (Some(extracted_mask), Some(mask_asset)) = (extracted_mask, mask_asset) {
-                    let Some(gpu_image) = gpu_images.get(extracted_mask.image_handle_id) else {
-                        continue;
-                    };
-
-                    batch_mask_image_size = gpu_image.size.as_vec2();
-
-                    image_bind_groups
-                        .mask_values
-                        .entry(mask_asset)
-                        .or_insert_with(|| {
-                            render_device.create_bind_group(
-                                "sprite_mask_material_bind_group",
-                                &sprite_pipeline.mask_material_layout,
-                                &BindGroupEntries::sequential((
-                                    &gpu_image.texture_view,
-                                    &sprite_pipeline.dummy_white_gpu_image.texture_view,
-                                    &gpu_image.sampler,
-                                )),
-                            )
-                        });
-                }
-
-                batch_mask_handle = mask_asset;
-            }
-
             let sprite_transform = extracted_sprite.calculate_transform(&batch_image_size);
             let sprite_uv_offset_scale =
                 extracted_sprite.calculate_uv_offset_scale(&batch_image_size);
 
-            let sprite_instance = SpriteInstance::from(
+            let mut sprite_instance = SpriteInstance::from(
                 &sprite_transform,
                 &extracted_sprite.color,
                 &sprite_uv_offset_scale,
                 extracted_sprite.blend_mode,
             );
 
+            let mut mask_image_handle_ids = Vec::new();
             // Store the vertex data and add the item to the render phase
-            let index = if let Some(extracted_mask) = extracted_mask {
-                let mask_transform = extracted_mask
-                    .calculate_transform(&batch_mask_image_size)
-                    .inverse()
-                    * sprite_transform;
-                let mask_uv_offset_scale =
-                    extracted_mask.calculate_uv_offset_scale(&batch_mask_image_size);
-                let masked_sprite_instance = MaskedSpriteInstance::from(
-                    sprite_instance,
-                    [Some((&mask_transform, &mask_uv_offset_scale)), None],
+            let index = if extracted_sprite.mask_entities.is_empty() {
+                sprite_meta.sprite_instance_buffer.push(sprite_instance);
+
+                &mut unmasked_index
+            } else {
+                let mut masks = [None; MAX_MASK_COUNT];
+
+                for (index, reflect_entity) in extracted_sprite.mask_entities.iter().enumerate() {
+                    if let Some(entity) = reflect_entity.downcast_ref::<Entity>() {
+                        if let Some(extracted_mask) = extracted_sprite_masks.masks.get(entity) {
+                            let Some(gpu_image) = gpu_images.get(extracted_mask.image_handle_id)
+                            else {
+                                continue;
+                            };
+
+                            let image_size = gpu_image.size.as_vec2();
+                            let mask_transform =
+                                extracted_mask.calculate_transform(&image_size).inverse()
+                                    * sprite_transform;
+                            let mask_uv_offset_scale =
+                                extracted_mask.calculate_uv_offset_scale(&image_size);
+
+                            if index < MAX_MASK_COUNT {
+                                masks[index] = Some((mask_transform, mask_uv_offset_scale));
+                                sprite_instance.mask_count += 1;
+                            }
+
+                            image_bind_groups
+                                .mask_values
+                                .entry(extracted_mask.image_handle_id)
+                                .or_insert_with(|| {
+                                    render_device.create_bind_group(
+                                        "sprite_mask_material_bind_group",
+                                        &sprite_pipeline.mask_material_layout,
+                                        &BindGroupEntries::sequential((
+                                            &gpu_image.texture_view,
+                                            &gpu_image.sampler,
+                                        )),
+                                    )
+                                });
+
+                            mask_image_handle_ids.push(extracted_mask.image_handle_id);
+                        }
+                    }
+                }
+
+                info!(
+                    "mask count: {}, masks: {masks:?}",
+                    sprite_instance.mask_count
                 );
+                let masked_sprite_instance = MaskedSpriteInstance::from(sprite_instance, masks);
 
                 sprite_meta
                     .masked_sprite_instance_buffer
                     .push(masked_sprite_instance);
 
                 &mut masked_index
-            } else {
-                sprite_meta.sprite_instance_buffer.push(sprite_instance);
-
-                &mut unmasked_index
             };
 
-            if batch_image_changed || batch_mask_changed {
-                batch_item_index = item_index;
+            let batch_masks_changed = batch_mask_image_handles != mask_image_handle_ids;
 
-                let mask_image_handle_id = extracted_mask.map(|em| em.image_handle_id);
+            batch_mask_image_handles = mask_image_handle_ids.clone();
+
+            // 对于 masked sprite 就不进行批处理逻辑了
+            // NOTE 这里需要注意一个 trap，那就是不能简单的根据有没有 mask 来决定要不要创建新 batch
+            //  因为可能存在，同一个 sprite，上一个有 mask，下一个没有 mask，此时也是需要创建新 batch 的
+            if batch_image_changed || batch_masks_changed || !mask_image_handle_ids.is_empty() {
+                batch_item_index = item_index;
 
                 batches.push((
                     item.entity,
                     SpriteBatch {
                         image_handle_id: batch_image_handle,
                         range: *index..*index,
-                        mask_image_handle_id,
+                        mask_image_handle_ids,
                     },
                 ));
             }
@@ -1103,6 +1119,20 @@ pub fn prepare_sprite_image_bind_groups(
             .write_buffer(&render_device, &render_queue);
     }
 
+    info!(
+        "sprite_index_buffer length: {}",
+        sprite_meta.sprite_index_buffer.len()
+    );
+    info!(
+        "sprite_instance_buffer length: {}",
+        sprite_meta.sprite_instance_buffer.len()
+    );
+    info!(
+        "masked_sprite_instance_buffer length: {}",
+        sprite_meta.masked_sprite_instance_buffer.len()
+    );
+    info!("batches count: {}", batches.len());
+
     *previous_len = batches.len();
     commands.insert_or_spawn_batch(batches);
 }
@@ -1113,6 +1143,7 @@ pub type DrawSprite = (
     SetSpriteViewBindGroup<0>,
     SetSpriteTextureBindGroup<1>,
     SetSpriteMaskTextureBindGroup<2>,
+    SetSpriteMaskTextureBindGroup<3>,
     DrawSpriteBatch,
 );
 
@@ -1138,7 +1169,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetSpriteViewBindGroup<I
 pub struct SetSpriteTextureBindGroup<const I: usize>;
 
 impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetSpriteTextureBindGroup<I> {
-    type Param = SRes<ImageBindGroups>;
+    type Param = SRes<SpriteRenderResource>;
     type ViewQuery = ();
     type ItemQuery = Read<SpriteBatch>;
 
@@ -1169,7 +1200,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetSpriteTextureBindGrou
 pub struct SetSpriteMaskTextureBindGroup<const I: usize>;
 
 impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetSpriteMaskTextureBindGroup<I> {
-    type Param = SRes<ImageBindGroups>;
+    type Param = SRes<SpriteRenderResource>;
     type ViewQuery = ();
     type ItemQuery = Read<SpriteBatch>;
 
@@ -1182,17 +1213,19 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetSpriteMaskTextureBind
     ) -> RenderCommandResult {
         let image_bind_groups = image_bind_groups.into_inner();
 
-        if let Some(mask_image_handle_id) = &batch.unwrap().mask_image_handle_id {
-            pass.set_bind_group(
-                I,
-                image_bind_groups
-                    .mask_values
-                    .get(mask_image_handle_id)
-                    .unwrap(),
-                &[],
-            );
+        let mut bind_group = image_bind_groups.dummy.as_ref();
+        if let Some(reflect_mask_image_handle_id) = &batch.unwrap().mask_image_handle_ids.get(I - 2)
+        {
+            if let Some(mask_image_handle_id) =
+                reflect_mask_image_handle_id.downcast_ref::<AssetId<Image>>()
+            {
+                bind_group = image_bind_groups.mask_values.get(mask_image_handle_id);
+            }
         }
-        // TODO 这里有修改为支持多个 mask 后，需要判断 mask_image_handle_ids 为空，就不设置 pass，不为空，就设置，然后不足的用 image_bind_groups.white_dummy_gpu_image 补足
+
+        if let Some(bind_group) = bind_group {
+            pass.set_bind_group(I, bind_group, &[]);
+        }
 
         RenderCommandResult::Success
     }
@@ -1223,10 +1256,16 @@ impl<P: PhaseItem> RenderCommand<P> for DrawSpriteBatch {
             IndexFormat::Uint32,
         );
 
-        let buffer = if batch.mask_image_handle_id.is_some() {
-            sprite_meta.masked_sprite_instance_buffer.buffer()
-        } else {
+        info!(
+            "DrawSpriteBatch: mask_count: {}, range: {:?}",
+            batch.mask_image_handle_ids.len(),
+            batch.range
+        );
+
+        let buffer = if batch.mask_image_handle_ids.is_empty() {
             sprite_meta.sprite_instance_buffer.buffer()
+        } else {
+            sprite_meta.masked_sprite_instance_buffer.buffer()
         };
         pass.set_vertex_buffer(0, buffer.unwrap().slice(..));
         pass.draw_indexed(0..6, 0, batch.range.clone());

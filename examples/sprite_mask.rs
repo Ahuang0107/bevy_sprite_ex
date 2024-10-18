@@ -33,10 +33,10 @@ fn setup_sprites(mut commands: Commands, asset_server: Res<AssetServer>) {
     });
     commands.spawn(SpriteExBundle {
         texture: asset_server.load("sprite01.png"),
-        transform: Transform::from_xyz(8.0, 0.0, 10.0),
+        transform: Transform::from_xyz(8.0, 0.0, 1.0),
         sprite: SpriteEx {
             blend_mode: BlendMode::Normal,
-            order: 10,
+            order: 1,
             ..default()
         },
         ..default()
@@ -53,16 +53,16 @@ fn setup_sprites(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
         ..default()
     });
-    commands.spawn(SpriteMaskBundle {
-        texture: asset_server.load("mask02.png"),
-        transform: Transform::from_xyz(0.0, 0.0, 0.0),
-        sprite_mask: SpriteMask {
-            range_start: 0,
-            range_end: 5,
-            ..default()
-        },
-        ..default()
-    });
+    // commands.spawn(SpriteMaskBundle {
+    //     texture: asset_server.load("mask02.png"),
+    //     transform: Transform::from_xyz(0.0, 0.0, 0.0),
+    //     sprite_mask: SpriteMask {
+    //         range_start: 0,
+    //         range_end: 10,
+    //         ..default()
+    //     },
+    //     ..default()
+    // });
 }
 
 const STEP: f32 = 0.05;
