@@ -97,6 +97,7 @@ impl FromWorld for SpriteExPipeline {
                 ShaderStages::FRAGMENT,
                 (
                     texture_2d(TextureSampleType::Float { filterable: true }),
+                    texture_2d(TextureSampleType::Float { filterable: true }),
                     sampler(SamplerBindingType::Filtering),
                 ),
             ),
@@ -293,42 +294,36 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
                     offset: 80,
                     shader_location: 5,
                 },
-                // @location(6) _padding: vec3<i32>,
+                // @location(6) _padding: vec2<i32>,
                 VertexAttribute {
-                    format: VertexFormat::Sint32x3,
+                    format: VertexFormat::Sint32x2,
                     offset: 84,
                     shader_location: 6,
+                },
+                // @location(7) mask_count: i32,
+                VertexAttribute {
+                    format: VertexFormat::Sint32,
+                    offset: 92,
+                    shader_location: 7,
                 },
             ];
 
             if mask_enable {
-                array_stride += 64;
-                attributes.append(&mut vec![
-                    // @location(7) i_mask_model_transpose_col0: vec4<f32>,
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: 96,
-                        shader_location: 7,
-                    },
-                    // @location(8) i_mask_model_transpose_col1: vec4<f32>,
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: 112,
-                        shader_location: 8,
-                    },
-                    // @location(9) i_mask_model_transpose_col2: vec4<f32>,
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: 128,
-                        shader_location: 9,
-                    },
-                    // @location(10) i_mask_uv_offset_scale: vec4<f32>,
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: 144,
-                        shader_location: 10,
-                    },
-                ])
+                array_stride += 16 * 4;
+                let mut offset = 96;
+                let mut shader_location = 8;
+                for _mask_count in 0..2 {
+                    for _attribute_count in 0..4 {
+                        // @location(8) i_mask_0_model_transpose_col0: vec4<f32>,
+                        attributes.push(VertexAttribute {
+                            format: VertexFormat::Float32x4,
+                            offset,
+                            shader_location,
+                        });
+                        offset += 16;
+                        shader_location += 1;
+                    }
+                }
             }
 
             VertexBufferLayout {
@@ -617,7 +612,8 @@ struct SpriteInstance {
     pub blend_mode: i32,
     // 原来的几个变量都是 4*4 字节的倍数（i_model_transpose 是 [[f32;4];3]）
     // 所以加了 blend_mode 后还得在加一个 _padding 确保依旧是 4*4 字节的倍数
-    pub _padding: [i32; 3],
+    pub _padding: [i32; 2],
+    pub mask_count: i32,
 }
 
 impl SpriteInstance {
@@ -638,7 +634,8 @@ impl SpriteInstance {
             i_color: color.to_f32_array(),
             i_uv_offset_scale: uv_offset_scale.to_array(),
             blend_mode: blend_mode as i32,
-            _padding: [0, 0, 0],
+            _padding: [0, 0],
+            mask_count: 0,
         }
     }
 }
@@ -648,32 +645,46 @@ impl SpriteInstance {
 struct MaskedSpriteInstance {
     pub sprite: SpriteInstance,
     // Affine 4x3 transposed to 3x4
-    pub i_mask_model_transpose: [Vec4; 3],
-    pub i_mask_uv_offset_scale: [f32; 4],
+    pub i_mask_0_model_transpose: [Vec4; 3],
+    pub i_mask_0_uv_offset_scale: [f32; 4],
+    // second mask, can be default
+    pub i_mask_1_model_transpose: [Vec4; 3],
+    pub i_mask_1_uv_offset_scale: [f32; 4],
 }
 
 impl MaskedSpriteInstance {
     #[inline]
-    fn from(
-        sprite_instance: SpriteInstance,
-        mask_transform: &Affine3A,
-        mask_uv_offset_scale: &Vec4,
-    ) -> Self {
-        let mask_transpose_model_3x3 = mask_transform.matrix3.transpose();
+    fn from(sprite_instance: SpriteInstance, masks: [Option<(&Affine3A, &Vec4)>; 2]) -> Self {
+        let (i_mask_0_model_transpose, i_mask_0_uv_offset_scale) = Self::from_mask(masks[0]);
+        let (i_mask_1_model_transpose, i_mask_1_uv_offset_scale) = Self::from_mask(masks[1]);
         Self {
             sprite: sprite_instance,
-            i_mask_model_transpose: [
-                mask_transpose_model_3x3
-                    .x_axis
-                    .extend(mask_transform.translation.x),
-                mask_transpose_model_3x3
-                    .y_axis
-                    .extend(mask_transform.translation.y),
-                mask_transpose_model_3x3
-                    .z_axis
-                    .extend(mask_transform.translation.z),
-            ],
-            i_mask_uv_offset_scale: mask_uv_offset_scale.to_array(),
+            i_mask_0_model_transpose,
+            i_mask_0_uv_offset_scale,
+            i_mask_1_model_transpose,
+            i_mask_1_uv_offset_scale,
+        }
+    }
+    #[inline]
+    fn from_mask(mask: Option<(&Affine3A, &Vec4)>) -> ([Vec4; 3], [f32; 4]) {
+        if let Some((mask_transform, mask_uv_offset_scale)) = mask {
+            let mask_transpose_model_3x3 = mask_transform.matrix3.transpose();
+            (
+                [
+                    mask_transpose_model_3x3
+                        .x_axis
+                        .extend(mask_transform.translation.x),
+                    mask_transpose_model_3x3
+                        .y_axis
+                        .extend(mask_transform.translation.y),
+                    mask_transpose_model_3x3
+                        .z_axis
+                        .extend(mask_transform.translation.z),
+                ],
+                mask_uv_offset_scale.to_array(),
+            )
+        } else {
+            ([Vec4::default(); 3], [0., 0., 0., 0.])
         }
     }
 }
@@ -721,6 +732,7 @@ pub struct SpriteBatch {
 pub struct ImageBindGroups {
     values: HashMap<AssetId<Image>, BindGroup>,
     mask_values: HashMap<AssetId<Image>, BindGroup>,
+    dummy_white_gpu_image: Option<GpuImage>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -894,6 +906,8 @@ pub fn prepare_sprite_image_bind_groups(
         };
     }
 
+    image_bind_groups.dummy_white_gpu_image = Some(sprite_pipeline.dummy_white_gpu_image.clone());
+
     let mut batches: Vec<(Entity, SpriteBatch)> = Vec::with_capacity(*previous_len);
 
     // Clear the sprite instances
@@ -980,6 +994,7 @@ pub fn prepare_sprite_image_bind_groups(
                                 &sprite_pipeline.mask_material_layout,
                                 &BindGroupEntries::sequential((
                                     &gpu_image.texture_view,
+                                    &sprite_pipeline.dummy_white_gpu_image.texture_view,
                                     &gpu_image.sampler,
                                 )),
                             )
@@ -1010,8 +1025,7 @@ pub fn prepare_sprite_image_bind_groups(
                     extracted_mask.calculate_uv_offset_scale(&batch_mask_image_size);
                 let masked_sprite_instance = MaskedSpriteInstance::from(
                     sprite_instance,
-                    &mask_transform,
-                    &mask_uv_offset_scale,
+                    [Some((&mask_transform, &mask_uv_offset_scale)), None],
                 );
 
                 sprite_meta
@@ -1168,6 +1182,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetSpriteMaskTextureBind
                 &[],
             );
         }
+        // TODO 这里有修改为支持多个 mask 后，需要判断 mask_image_handle_ids 为空，就不设置 pass，不为空，就设置，然后不足的用 image_bind_groups.white_dummy_gpu_image 补足
 
         RenderCommandResult::Success
     }

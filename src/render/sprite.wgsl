@@ -20,13 +20,19 @@ struct VertexInput {
     @location(3) i_color: vec4<f32>,
     @location(4) i_uv_offset_scale: vec4<f32>,
     @location(5) blend_mode: i32,
-    @location(6) _padding: vec3<i32>,
+    @location(6) _padding: vec2<i32>,
+    @location(7) mask_count: i32,
 
 #ifdef MASK
-    @location(7) i_mask_model_transpose_col0: vec4<f32>,
-    @location(8) i_mask_model_transpose_col1: vec4<f32>,
-    @location(9) i_mask_model_transpose_col2: vec4<f32>,
-    @location(10) i_mask_uv_offset_scale: vec4<f32>,
+    @location(8) i_mask_0_model_transpose_col0: vec4<f32>,
+    @location(9) i_mask_0_model_transpose_col1: vec4<f32>,
+    @location(10) i_mask_0_model_transpose_col2: vec4<f32>,
+    @location(11) i_mask_0_uv_offset_scale: vec4<f32>,
+
+    @location(12) i_mask_1_model_transpose_col0: vec4<f32>,
+    @location(13) i_mask_1_model_transpose_col1: vec4<f32>,
+    @location(14) i_mask_1_model_transpose_col2: vec4<f32>,
+    @location(15) i_mask_1_uv_offset_scale: vec4<f32>,
 #endif
 }
 
@@ -35,9 +41,11 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(2) @interpolate(flat) blend_mode: i32,
+    @location(3) @interpolate(flat) mask_count: i32,
 
 #ifdef MASK
-    @location(3) mask_uv: vec2<f32>,
+    @location(4) mask_0_uv: vec2<f32>,
+    @location(5) mask_1_uv: vec2<f32>,
 #endif
 };
 
@@ -60,13 +68,21 @@ fn vertex(in: VertexInput) -> VertexOutput {
     out.color = in.i_color;
     out.blend_mode = in.blend_mode;
 
+    out.mask_count = in.mask_count;
 #ifdef MASK
-    let mask_position = affine3_to_square(mat3x4<f32>(
-        in.i_mask_model_transpose_col0,
-        in.i_mask_model_transpose_col1,
-        in.i_mask_model_transpose_col2,
+    let mask_0_position = affine3_to_square(mat3x4<f32>(
+        in.i_mask_0_model_transpose_col0,
+        in.i_mask_0_model_transpose_col1,
+        in.i_mask_0_model_transpose_col2,
     )) * vec4<f32>(vertex_position, 1.0);
-    out.mask_uv = vec2<f32>(mask_position.xy) * in.i_mask_uv_offset_scale.zw + in.i_mask_uv_offset_scale.xy;
+    out.mask_0_uv = vec2<f32>(mask_0_position.xy) * in.i_mask_0_uv_offset_scale.zw + in.i_mask_0_uv_offset_scale.xy;
+    
+    let mask_1_position = affine3_to_square(mat3x4<f32>(
+        in.i_mask_1_model_transpose_col0,
+        in.i_mask_1_model_transpose_col1,
+        in.i_mask_1_model_transpose_col2,
+    )) * vec4<f32>(vertex_position, 1.0);
+    out.mask_1_uv = vec2<f32>(mask_1_position.xy) * in.i_mask_1_uv_offset_scale.zw + in.i_mask_1_uv_offset_scale.xy;
 #endif
 
     return out;
@@ -77,8 +93,9 @@ fn vertex(in: VertexInput) -> VertexOutput {
 
 #ifdef MASK
 
-@group(2) @binding(0) var mask_texture: texture_2d<f32>;
-@group(2) @binding(1) var mask_sampler: sampler;
+@group(2) @binding(0) var mask_0_texture: texture_2d<f32>;
+@group(2) @binding(1) var mask_1_texture: texture_2d<f32>;
+@group(2) @binding(2) var mask_sampler: sampler;
 
 #endif
 
@@ -95,11 +112,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
 
 #ifdef MASK
-    if in.mask_uv.x >= 0 && in.mask_uv.x <= 1 && in.mask_uv.y >= 0 && in.mask_uv.y <= 1 {
-        var mask_texture = textureSample(mask_texture, mask_sampler, in.mask_uv);
+    if in.mask_0_uv.x >= 0 && in.mask_0_uv.x <= 1 && in.mask_0_uv.y >= 0 && in.mask_0_uv.y <= 1 {
+        var mask_texture = textureSample(mask_0_texture, mask_sampler, in.mask_0_uv);
 
         if mask_texture.x != 0.0 {
             color.a = 0.0;
+        }
+    }
+    if in.mask_count > 1 {
+        if in.mask_1_uv.x >= 0 && in.mask_1_uv.x <= 1 && in.mask_1_uv.y >= 0 && in.mask_1_uv.y <= 1 {
+            var mask_texture = textureSample(mask_1_texture, mask_sampler, in.mask_1_uv);
+    
+            if mask_texture.x != 0.0 {
+                color.a = 0.0;
+            }
         }
     }
 #endif
