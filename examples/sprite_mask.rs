@@ -21,12 +21,23 @@ fn setup_camera(mut commands: Commands) {
 }
 
 fn setup_sprites(mut commands: Commands, asset_server: Res<AssetServer>) {
+    // 表示最底层 sprite，为了方便观察上层 sprite 的显示情况，同时也是为了测试 mask 范围外的 sprite 的显示情况
     commands.spawn(SpriteExBundle {
-        texture: asset_server.load("sprite01.png"),
-        transform: Transform::from_xyz(-8.0, 0.0, 1.0),
+        texture: asset_server.load("sprite02.png"),
+        transform: Transform::from_xyz(-8.0, 0.0, 0.1),
         sprite: SpriteEx {
             blend_mode: BlendMode::Normal,
-            order: 1,
+            order: 0,
+            ..default()
+        },
+        ..default()
+    });
+    commands.spawn(SpriteExBundle {
+        texture: asset_server.load("sprite01.png"),
+        transform: Transform::from_xyz(-8.0, 0.0, 2.0),
+        sprite: SpriteEx {
+            blend_mode: BlendMode::Normal,
+            order: 2,
             ..default()
         },
         ..default()
@@ -47,22 +58,22 @@ fn setup_sprites(mut commands: Commands, asset_server: Res<AssetServer>) {
         texture: asset_server.load("mask01.png"),
         transform: Transform::from_xyz(0.0, 0.0, 0.0),
         sprite_mask: SpriteMask {
-            range_start: 0,
+            range_start: 1,
             range_end: 5,
             ..default()
         },
         ..default()
     });
-    // commands.spawn(SpriteMaskBundle {
-    //     texture: asset_server.load("mask02.png"),
-    //     transform: Transform::from_xyz(0.0, 0.0, 0.0),
-    //     sprite_mask: SpriteMask {
-    //         range_start: 0,
-    //         range_end: 10,
-    //         ..default()
-    //     },
-    //     ..default()
-    // });
+    commands.spawn(SpriteMaskBundle {
+        texture: asset_server.load("mask02.png"),
+        transform: Transform::from_xyz(0.0, 0.0, 0.0),
+        sprite_mask: SpriteMask {
+            range_start: 2,
+            range_end: 5,
+            ..default()
+        },
+        ..default()
+    });
 }
 
 const STEP: f32 = 0.05;

@@ -41,7 +41,6 @@ use bevy_transform::components::GlobalTransform;
 use bevy_utils::HashMap;
 use bytemuck::{Pod, Zeroable};
 use fixedbitset::FixedBitSet;
-use tracing::info;
 
 use crate::{BlendMode, SpriteEx, SpriteMask, WithSprite, SPRITE_SHADER_HANDLE};
 
@@ -312,10 +311,10 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
             ];
 
             if mask_enable {
-                array_stride += 16 * 4;
+                array_stride += 16 * 4 * (MAX_MASK_COUNT as u64);
                 let mut offset = 96;
                 let mut shader_location = 8;
-                for _mask_count in 0..2 {
+                for _mask_count in 0..MAX_MASK_COUNT {
                     for _attribute_count in 0..4 {
                         // @location(8) i_mask_0_model_transpose_col0: vec4<f32>,
                         attributes.push(VertexAttribute {
@@ -1047,10 +1046,6 @@ pub fn prepare_sprite_image_bind_groups(
                     }
                 }
 
-                info!(
-                    "mask count: {}, masks: {masks:?}",
-                    sprite_instance.mask_count
-                );
                 let masked_sprite_instance = MaskedSpriteInstance::from(sprite_instance, masks);
 
                 sprite_meta
@@ -1118,20 +1113,6 @@ pub fn prepare_sprite_image_bind_groups(
             .sprite_index_buffer
             .write_buffer(&render_device, &render_queue);
     }
-
-    info!(
-        "sprite_index_buffer length: {}",
-        sprite_meta.sprite_index_buffer.len()
-    );
-    info!(
-        "sprite_instance_buffer length: {}",
-        sprite_meta.sprite_instance_buffer.len()
-    );
-    info!(
-        "masked_sprite_instance_buffer length: {}",
-        sprite_meta.masked_sprite_instance_buffer.len()
-    );
-    info!("batches count: {}", batches.len());
 
     *previous_len = batches.len();
     commands.insert_or_spawn_batch(batches);
@@ -1254,12 +1235,6 @@ impl<P: PhaseItem> RenderCommand<P> for DrawSpriteBatch {
             sprite_meta.sprite_index_buffer.buffer().unwrap().slice(..),
             0,
             IndexFormat::Uint32,
-        );
-
-        info!(
-            "DrawSpriteBatch: mask_count: {}, range: {:?}",
-            batch.mask_image_handle_ids.len(),
-            batch.range
         );
 
         let buffer = if batch.mask_image_handle_ids.is_empty() {

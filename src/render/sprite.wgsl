@@ -77,12 +77,14 @@ fn vertex(in: VertexInput) -> VertexOutput {
     )) * vec4<f32>(vertex_position, 1.0);
     out.mask_0_uv = vec2<f32>(mask_0_position.xy) * in.i_mask_0_uv_offset_scale.zw + in.i_mask_0_uv_offset_scale.xy;
 
-    let mask_1_position = affine3_to_square(mat3x4<f32>(
-        in.i_mask_1_model_transpose_col0,
-        in.i_mask_1_model_transpose_col1,
-        in.i_mask_1_model_transpose_col2,
-    )) * vec4<f32>(vertex_position, 1.0);
-    out.mask_1_uv = vec2<f32>(mask_1_position.xy) * in.i_mask_1_uv_offset_scale.zw + in.i_mask_1_uv_offset_scale.xy;
+    if in.mask_count > 1 {
+        let mask_1_position = affine3_to_square(mat3x4<f32>(
+            in.i_mask_1_model_transpose_col0,
+            in.i_mask_1_model_transpose_col1,
+            in.i_mask_1_model_transpose_col2,
+        )) * vec4<f32>(vertex_position, 1.0);
+        out.mask_1_uv = vec2<f32>(mask_1_position.xy) * in.i_mask_1_uv_offset_scale.zw + in.i_mask_1_uv_offset_scale.xy;
+    }
 #endif
 
     return out;
