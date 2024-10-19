@@ -44,7 +44,7 @@ use fixedbitset::FixedBitSet;
 
 use crate::{BlendMode, SpriteEx, SpriteMask, WithSprite, SPRITE_SHADER_HANDLE};
 
-const MAX_MASK_COUNT: usize = 2;
+const MAX_MASK_COUNT: usize = 5;
 
 #[derive(Resource)]
 pub struct SpriteExPipeline {
@@ -338,8 +338,9 @@ impl SpecializedRenderPipeline for SpriteExPipeline {
         let mut pipeline_layout = vec![self.view_layout.clone(), self.material_layout.clone()];
 
         if mask_enable {
-            pipeline_layout.push(self.mask_material_layout.clone());
-            pipeline_layout.push(self.mask_material_layout.clone());
+            for _mask_count in 0..MAX_MASK_COUNT {
+                pipeline_layout.push(self.mask_material_layout.clone());
+            }
         }
 
         RenderPipelineDescriptor {
@@ -667,6 +668,15 @@ struct MaskedSpriteInstance {
     // second mask, can be default
     pub i_mask_1_model_transpose: [Vec4; 3],
     pub i_mask_1_uv_offset_scale: [f32; 4],
+    // third mask, can be default
+    pub i_mask_2_model_transpose: [Vec4; 3],
+    pub i_mask_2_uv_offset_scale: [f32; 4],
+    // fourth mask, can be default
+    pub i_mask_3_model_transpose: [Vec4; 3],
+    pub i_mask_3_uv_offset_scale: [f32; 4],
+    // fifth mask, can be default
+    pub i_mask_4_model_transpose: [Vec4; 3],
+    pub i_mask_4_uv_offset_scale: [f32; 4],
 }
 
 impl MaskedSpriteInstance {
@@ -677,12 +687,21 @@ impl MaskedSpriteInstance {
     ) -> Self {
         let (i_mask_0_model_transpose, i_mask_0_uv_offset_scale) = Self::from_mask(masks[0]);
         let (i_mask_1_model_transpose, i_mask_1_uv_offset_scale) = Self::from_mask(masks[1]);
+        let (i_mask_2_model_transpose, i_mask_2_uv_offset_scale) = Self::from_mask(masks[2]);
+        let (i_mask_3_model_transpose, i_mask_3_uv_offset_scale) = Self::from_mask(masks[3]);
+        let (i_mask_4_model_transpose, i_mask_4_uv_offset_scale) = Self::from_mask(masks[4]);
         Self {
             sprite: sprite_instance,
             i_mask_0_model_transpose,
             i_mask_0_uv_offset_scale,
             i_mask_1_model_transpose,
             i_mask_1_uv_offset_scale,
+            i_mask_2_model_transpose,
+            i_mask_2_uv_offset_scale,
+            i_mask_3_model_transpose,
+            i_mask_3_uv_offset_scale,
+            i_mask_4_model_transpose,
+            i_mask_4_uv_offset_scale,
         }
     }
     #[inline]
@@ -1125,6 +1144,9 @@ pub type DrawSprite = (
     SetSpriteTextureBindGroup<1>,
     SetSpriteMaskTextureBindGroup<2>,
     SetSpriteMaskTextureBindGroup<3>,
+    SetSpriteMaskTextureBindGroup<4>,
+    SetSpriteMaskTextureBindGroup<5>,
+    SetSpriteMaskTextureBindGroup<6>,
     DrawSpriteBatch,
 );
 
