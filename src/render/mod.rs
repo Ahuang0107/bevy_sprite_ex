@@ -854,7 +854,7 @@ pub fn queue_sprites(
             }
 
             for (mask_entity, extracted_sprite_mask) in extracted_sprite_masks.masks.iter() {
-                if extracted_sprite.order >= extracted_sprite_mask.range_start
+                if extracted_sprite.order > extracted_sprite_mask.range_start
                     && extracted_sprite.order <= extracted_sprite_mask.range_end
                 {
                     extracted_sprite.mask_entities.push(*mask_entity);
